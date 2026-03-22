@@ -1,0 +1,13 @@
+.env
+.env.local
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+logs/
+.venv/
+venv/
+*.log
+
+# реальные маппинги — не в git (есть .example)
+user_mapping_seed.json

@@ -1,0 +1,11 @@
+# Не кладём секреты в слои образа — переменные из .env подставляет docker-compose (env_file) при запуске
+.env
+.env.*
+!.env.example
+
+.git
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+logs

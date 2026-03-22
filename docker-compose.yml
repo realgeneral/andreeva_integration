@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: .
+      # Часто помогает при таймаутах к pypi.org из шага RUN pip (Linux)
+      network: host
+      # Только для pip на стадии сборки (см. Dockerfile AS deps). TELEGRAM_HTTP_PROXY в .env на билд не влияет.
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        # В .env: PIP_USE_MIRROR=1 если pip к pypi.org таймаутит при сборке
+        PIP_USE_MIRROR: ${PIP_USE_MIRROR:-}
+        # Свой индекс (опционально, оба сразу):
+        # PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        # PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+    restart: unless-stopped
+    container_name: andreeva_integration_web
+    env_file:
+      - .env
+    ports:
+      - "8081:8000"
+    volumes:
+      - ./logs:/app/logs
+
+  poller:
+    build:
+      context: .
+      network: host
+      # TELEGRAM_HTTP_PROXY из .env только в рантайме; для pip — только args ниже.
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        PIP_USE_MIRROR: ${PIP_USE_MIRROR:-}
+    restart: unless-stopped
+    container_name: andreeva_integration_poller
+    command: ["python", "poll_worker.py"]
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+
+  # Опрос сделок amoCRM (updated_at) — та же логика, что вебхук add_lead; интервал AMO_LEADS_POLL_INTERVAL_SECONDS
+  amo_leads_poller:
+    build:
+      context: .
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        PIP_USE_MIRROR: ${PIP_USE_MIRROR:-}
+    restart: unless-stopped
+    container_name: andreeva_integration_amo_leads_poller
+    command: ["python", "amo_leads_poll_worker.py"]
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+
