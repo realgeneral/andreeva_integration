@@ -11,7 +11,7 @@ from amocrm_client import (
     get_lead_with_links,
     update_responsible,
 )
-from config import AMO_INN_FIELD_ID, MOYSKLAD_BASE_URL
+from config import AMO_INN_FIELD_ID, AMO_MS_ORDER_LINK_FIELD_ID, MOYSKLAD_BASE_URL
 from db import get_amocrm_user_id_by_ms_owner
 from moysklad_client import find_counterparty_by_inn_or_phone
 from telegram_logger import notify_skip, notify_success
@@ -62,21 +62,40 @@ def _extract_phone_from_company(company: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _lead_custom_field_text_by_field_id(entity: Dict[str, Any], field_id: int) -> Optional[str]:
+    """Первое непустое значение из custom_fields_values по field_id (ссылка, текст, …)."""
+    for cf in entity.get("custom_fields_values") or []:
+        if cf.get("field_id") != field_id:
+            continue
+        for val in cf.get("values") or []:
+            raw = val.get("value")
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if text:
+                return text
+    return None
+
+
 async def _notify_and_log_skip(
     status: str,
     reason_code: str,
     title: str,
     details: str,
     context: str,
-) -> Dict[str, str]:
-    logger.warning(
+    *,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    log_fn = logger.info if dry_run else logger.warning
+    log_fn(
         "Non-success status=%s reason_code=%s | details=%s | context=%s",
         status,
         reason_code,
         details,
         context,
     )
-    await notify_skip(reason_code, title, details=details, context=context)
+    if not dry_run:
+        await notify_skip(reason_code, title, details=details, context=context)
     return {"status": status}
 
 
@@ -85,20 +104,40 @@ async def process_amo_add_lead_owner_sync(
     *,
     source: str = "webhook",
     source_ip: str = "unknown",
-) -> Dict[str, str]:
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """
     Та же логика, что и вебхук add_lead: МС → ответственный в сделке/компании/контакте.
     Возвращает {"status": "ok"} или словарь со status=skip_*; бросает исключение при сбоях API.
+    dry_run=True: не PATCH в amo, не Telegram; только логика и логи (для отчётов / бэкфилла).
     """
     logger.info(
-        "[SCENARIO=%s] START | id=%s | source=%s | source_ip=%s",
+        "[SCENARIO=%s] START | id=%s | source=%s | source_ip=%s dry_run=%s",
         SCENARIO,
         lead_id,
         source,
         source_ip,
+        dry_run,
     )
 
     lead = await get_lead_with_links(lead_id)
+
+    if AMO_MS_ORDER_LINK_FIELD_ID:
+        try:
+            ms_link_fid = int(AMO_MS_ORDER_LINK_FIELD_ID)
+        except (TypeError, ValueError):
+            ms_link_fid = None
+        if ms_link_fid is not None:
+            order_link = _lead_custom_field_text_by_field_id(lead, ms_link_fid)
+            if not order_link:
+                logger.info(
+                    "[SCENARIO=%s] IGNORE | lead_id=%s нет ссылки в поле МойСклад (field_id=%s) — пропуск",
+                    SCENARIO,
+                    lead_id,
+                    ms_link_fid,
+                )
+                return {"status": "ignored_no_moysklad_order_link"}
+
     embedded = lead.get("_embedded", {})
     companies = embedded.get("companies", [])
     contacts = embedded.get("contacts", [])
@@ -150,7 +189,7 @@ async def process_amo_add_lead_owner_sync(
         )
 
     if not counterparty:
-        if contact_id and contact_phone is None:
+        if contact_id and contact_phone is None and not dry_run:
             await notify_skip(
                 "skip_no_phone_FIELD_CODE_PHONE",
                 "Нет телефона в contact.field_code=PHONE",
@@ -169,6 +208,7 @@ async def process_amo_add_lead_owner_sync(
                 f"inn={inn}, company_phone={company_phone}, "
                 f"contact_phone={contact_phone}, used_phone={search_phone}"
             ),
+            dry_run=dry_run,
         )
 
     owner_meta = counterparty.get("owner", {}).get("meta", {})
@@ -183,6 +223,7 @@ async def process_amo_add_lead_owner_sync(
                 f"inn={inn}, company_phone={company_phone}, "
                 f"contact_phone={contact_phone}, used_phone={search_phone}"
             ),
+            dry_run=dry_run,
         )
 
     amocrm_user_id = get_amocrm_user_id_by_ms_owner(str(owner_id))
@@ -193,6 +234,7 @@ async def process_amo_add_lead_owner_sync(
             title="Нет строки user_mapping для owner из МойСклад",
             details=f"owner_id={owner_id}",
             context=f"lead_id={lead_id}",
+            dry_run=dry_run,
         )
     logger.info(
         "[SCENARIO=%s] MAP_OWNER | lead_id=%s owner_id=%s amo_user_id=%s",
@@ -202,35 +244,39 @@ async def process_amo_add_lead_owner_sync(
         amocrm_user_id,
     )
 
-    await update_responsible("leads", lead_id, amocrm_user_id)
+    if not dry_run:
+        await update_responsible("leads", lead_id, amocrm_user_id)
     _log_step(
         "UPDATE_LEAD_RESPONSIBLE",
-        f"lead_id={lead_id}, responsible_user_id={amocrm_user_id}",
+        f"lead_id={lead_id}, responsible_user_id={amocrm_user_id} (dry_run={dry_run})",
     )
 
     if company_id:
-        await update_responsible("companies", company_id, amocrm_user_id)
+        if not dry_run:
+            await update_responsible("companies", company_id, amocrm_user_id)
         _log_step(
             "UPDATE_COMPANY_RESPONSIBLE",
-            f"company_id={company_id}, responsible_user_id={amocrm_user_id}",
+            f"company_id={company_id}, responsible_user_id={amocrm_user_id} (dry_run={dry_run})",
         )
     if contact_id:
-        await update_responsible("contacts", contact_id, amocrm_user_id)
+        if not dry_run:
+            await update_responsible("contacts", contact_id, amocrm_user_id)
         _log_step(
             "UPDATE_CONTACT_RESPONSIBLE",
-            f"contact_id={contact_id}, responsible_user_id={amocrm_user_id}",
+            f"contact_id={contact_id}, responsible_user_id={amocrm_user_id} (dry_run={dry_run})",
         )
 
-    await notify_success(
-        "Успешная обработка add_lead (amoCRM -> МойСклад)",
-        details=f"Сделка: {lead_id} | источник: {source}",
-        context=(
-            f"owner_id={owner_id}, amo_user_id={amocrm_user_id}, "
-            f"inn={inn}, company_phone={company_phone}, "
-            f"contact_phone={contact_phone}, used_phone={search_phone}, "
-            f"company_id={company_id}, contact_id={contact_id}"
-        ),
-    )
+    if not dry_run:
+        await notify_success(
+            "Успешная обработка add_lead (amoCRM -> МойСклад)",
+            details=f"Сделка: {lead_id} | источник: {source}",
+            context=(
+                f"owner_id={owner_id}, amo_user_id={amocrm_user_id}, "
+                f"inn={inn}, company_phone={company_phone}, "
+                f"contact_phone={contact_phone}, used_phone={search_phone}, "
+                f"company_id={company_id}, contact_id={contact_id}"
+            ),
+        )
     logger.info(
         "[SCENARIO=%s] SUCCESS | lead_id=%s owner_id=%s amo_user_id=%s inn=%s company_phone=%s contact_phone=%s used_phone=%s source=%s",
         SCENARIO,
@@ -244,4 +290,8 @@ async def process_amo_add_lead_owner_sync(
         source,
     )
 
-    return {"status": "ok"}
+    out: Dict[str, str] = {"status": "ok"}
+    if dry_run:
+        out["would_amocrm_user_id"] = str(amocrm_user_id)
+        out["would_ms_owner"] = str(owner_id)
+    return out

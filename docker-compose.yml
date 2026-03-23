@@ -43,7 +43,7 @@ services:
     volumes:
       - ./logs:/app/logs
 
-  # Опрос сделок amoCRM (updated_at) — та же логика, что вебхук add_lead; интервал AMO_LEADS_POLL_INTERVAL_SECONDS
+  # Опрос новых сделок amoCRM (created_at по умолчанию); интервал AMO_LEADS_POLL_INTERVAL_SECONDS в .env
   amo_leads_poller:
     build:
       context: .

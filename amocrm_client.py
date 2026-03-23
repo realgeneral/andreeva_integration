@@ -16,6 +16,29 @@ def _auth_headers() -> Dict[str, str]:
     }
 
 
+def _amo_raise_for_status(resp: httpx.Response) -> None:
+    """
+    Аналог raise_for_status: при HTTP 400 логирует и добавляет тело ответа amo в текст исключения.
+    """
+    if resp.is_success:
+        return
+    if resp.status_code == 400:
+        body = (resp.text or "").strip()
+        logger.error(
+            "amoCRM HTTP 400 | %s %s | response.text=%s",
+            resp.request.method,
+            resp.url,
+            body if body else "(пусто)",
+        )
+        raise httpx.HTTPStatusError(
+            f"Client error '400 Bad Request' for url '{resp.url}'\n"
+            f"Amo response body:\n{body}",
+            request=resp.request,
+            response=resp,
+        )
+    resp.raise_for_status()
+
+
 async def find_company_by_inn(inn: str) -> Optional[Dict[str, Any]]:
     """
     Рабочий поиск компании по ИНН для текущего аккаунта amoCRM:
@@ -166,6 +189,90 @@ async def get_lead_with_links(lead_id: int) -> Dict[str, Any]:
         return resp.json()
 
 
+async def list_users(*, limit: int = 250) -> list[Dict[str, Any]]:
+    """Список пользователей аккаунта amoCRM (id, name, email, …)."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AMO_BASE_URL}/api/v4/users",
+            headers=_auth_headers(),
+            params={"limit": str(limit)},
+        )
+        if resp.status_code == 204:
+            return []
+        resp.raise_for_status()
+        return resp.json().get("_embedded", {}).get("users", [])
+
+
+async def get_leads_pipelines() -> list[Dict[str, Any]]:
+    """Воронки и статусы сделок (type: 0 обычный, 1 успех, 2 провал)."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AMO_BASE_URL}/api/v4/leads/pipelines",
+            headers=_auth_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json().get("_embedded", {}).get("pipelines", [])
+
+
+def terminal_status_ids_from_pipelines(pipelines: list[Dict[str, Any]]) -> set[int]:
+    """
+    ID закрывающих статусов (успех / провал).
+
+    В amo у «Неразобранного» часто type=1 — это НЕ закрытие сделки.
+    Системные этапы с id 142 / 143 — типичные «успех» и «провал» во многих аккаунтах.
+    Дополнительно учитываем type=2 там, где он означает провал.
+    """
+    closed: set[int] = set()
+    for pipe in pipelines:
+        for st in pipe.get("_embedded", {}).get("statuses", []) or []:
+            try:
+                sid = int(st["id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if sid in (142, 143):
+                closed.add(sid)
+                continue
+            if st.get("type") == 2:
+                closed.add(sid)
+    return closed
+
+
+async def fetch_leads_by_responsible_user(
+    responsible_user_id: int,
+    *,
+    limit: int = 250,
+) -> list[Dict[str, Any]]:
+    """
+    Все сделки, где ответственный = responsible_user_id (постранично).
+    В ответе списка обычно есть custom_fields_values (в т.ч. ссылка МС).
+    """
+    page = 1
+    out: list[Dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=60) as client:
+        while True:
+            params: list[tuple[str, str]] = [
+                ("filter[responsible_user_id][]", str(responsible_user_id)),
+                ("limit", str(limit)),
+                ("page", str(page)),
+            ]
+            resp = await client.get(
+                f"{AMO_BASE_URL}/api/v4/leads",
+                headers=_auth_headers(),
+                params=params,
+            )
+            if resp.status_code == 204:
+                break
+            resp.raise_for_status()
+            leads = resp.json().get("_embedded", {}).get("leads", [])
+            if not leads:
+                break
+            out.extend(leads)
+            if len(leads) < limit:
+                break
+            page += 1
+    return out
+
+
 async def get_company(company_id: int) -> Dict[str, Any]:
     """Получить компанию amoCRM по ID."""
     async with httpx.AsyncClient(timeout=15) as client:
@@ -201,7 +308,7 @@ async def update_responsible(
             headers=_auth_headers(),
             json=payload,
         )
-        resp.raise_for_status()
+        _amo_raise_for_status(resp)
 
 
 async def link_contact_to_company(contact_id: int, company_id: int) -> None:

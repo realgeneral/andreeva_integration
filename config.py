@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -21,6 +22,11 @@ DATABASE_URL = os.getenv(
 # ID кастомного поля ИНН в amoCRM (число в виде строки)
 AMO_INN_FIELD_ID = os.getenv("AMO_INN_FIELD_ID")
 
+# ID поля сделки «Ссылка на заказ в МойСклад» — без заполненного значения сделку не обрабатываем
+# По умолчанию 3257473; задать пустую строку в .env — отключить проверку
+_raw_ms_order_field = os.getenv("AMO_MS_ORDER_LINK_FIELD_ID", "3257473")
+AMO_MS_ORDER_LINK_FIELD_ID = (_raw_ms_order_field or "").strip() or None
+
 APP_NAME = os.getenv("APP_NAME", "andreeva-integration")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -35,14 +41,20 @@ TELEGRAM_HTTP_PROXY = (os.getenv("TELEGRAM_HTTP_PROXY") or "").strip() or None
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "120"))
 POLL_INITIAL_LOOKBACK_MINUTES = int(os.getenv("POLL_INITIAL_LOOKBACK_MINUTES", "10"))
 
-# Опрос сделок amoCRM — см. amo_leads_poll_worker.py (по умолчанию раз в 30 мин)
-AMO_LEADS_POLL_INTERVAL_SECONDS = int(os.getenv("AMO_LEADS_POLL_INTERVAL_SECONDS", "1800"))
+# Опрос сделок amoCRM — см. amo_leads_poll_worker.py (по умолчанию 5 мин)
+AMO_LEADS_POLL_INTERVAL_SECONDS = int(os.getenv("AMO_LEADS_POLL_INTERVAL_SECONDS", "300"))
 AMO_LEADS_POLL_LOOKBACK_MINUTES = int(os.getenv("AMO_LEADS_POLL_LOOKBACK_MINUTES", "10"))
 # Поллер сделок: created_at = только новые сделки (по умолчанию); updated_at = любое изменение
 _raw_poll_field = (os.getenv("AMO_LEADS_POLL_DATE_FIELD") or "created_at").strip().lower()
 AMO_LEADS_POLL_DATE_FIELD = _raw_poll_field if _raw_poll_field in ("created_at", "updated_at") else "created_at"
 
 # Вебхук POST /webhooks/amocrm/add_lead (по умолчанию выключён, если работает amo_leads_poller)
+# Пользователь amo «интеграция / бизнесавтоматизатор» — для ручного бэкфилла см. scripts/backfill_integration_leads.py
+_raw_amo_int_user = (os.getenv("AMO_INTEGRATION_RESPONSIBLE_USER_ID") or "").strip()
+AMO_INTEGRATION_RESPONSIBLE_USER_ID: Optional[int] = (
+    int(_raw_amo_int_user) if _raw_amo_int_user.isdigit() else None
+)
+
 AMO_ADD_LEAD_WEBHOOK_ENABLED = os.getenv("AMO_ADD_LEAD_WEBHOOK_ENABLED", "false").lower() in (
     "1",
     "true",
