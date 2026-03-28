@@ -13,6 +13,7 @@ from amocrm_client import (
 )
 from config import AMO_INN_FIELD_ID, AMO_MS_ORDER_LINK_FIELD_ID, MOYSKLAD_BASE_URL
 from db import get_amocrm_user_id_by_ms_owner
+from lead_sync_audit_log import append_amo_lead_sync_audit_line
 from moysklad_client import find_counterparty_by_inn_or_phone
 from telegram_logger import notify_skip, notify_success
 
@@ -111,6 +112,26 @@ async def process_amo_add_lead_owner_sync(
     Возвращает {"status": "ok"} или словарь со status=skip_*; бросает исключение при сбоях API.
     dry_run=True: не PATCH в amo, не Telegram; только логика и логи (для отчётов / бэкфилла).
     """
+    try:
+        out = await _amo_add_lead_owner_sync_core(
+            lead_id, source=source, source_ip=source_ip, dry_run=dry_run
+        )
+    except Exception:
+        append_amo_lead_sync_audit_line(lead_id, "ERROR")
+        raise
+    append_amo_lead_sync_audit_line(
+        lead_id, "OK" if out.get("status") == "ok" else "ERROR"
+    )
+    return out
+
+
+async def _amo_add_lead_owner_sync_core(
+    lead_id: int,
+    *,
+    source: str = "webhook",
+    source_ip: str = "unknown",
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     logger.info(
         "[SCENARIO=%s] START | id=%s | source=%s | source_ip=%s dry_run=%s",
         SCENARIO,

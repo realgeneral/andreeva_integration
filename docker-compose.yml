@@ -20,6 +20,8 @@ services:
     container_name: andreeva_integration_web
     env_file:
       - .env
+    environment:
+      AMO_MS_ORDER_LINK_FIELD_ID: ${AMO_MS_ORDER_LINK_FIELD_ID:-3257473}
     ports:
       - "8081:8000"
     volumes:
@@ -58,6 +60,9 @@ services:
     command: ["python", "amo_leads_poll_worker.py"]
     env_file:
       - .env
+    # Явно: иначе без строки в .env на сервере проверка ссылки МС отключена и летят skip_* по всем новым сделкам
+    environment:
+      AMO_MS_ORDER_LINK_FIELD_ID: ${AMO_MS_ORDER_LINK_FIELD_ID:-3257473}
     volumes:
       - ./logs:/app/logs
 

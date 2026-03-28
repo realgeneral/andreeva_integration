@@ -65,3 +65,14 @@ AMO_ADD_LEAD_WEBHOOK_ENABLED = os.getenv("AMO_ADD_LEAD_WEBHOOK_ENABLED", "false"
 LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
 LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "2"))
 
+# Доп. журнал сделок: дата - lead_id - OK/ERROR (по умолчанию LOG_DIR/amo_lead_sync_results.txt)
+_raw_lead_audit = os.getenv("AMO_LEAD_SYNC_RESULT_LOG")
+if _raw_lead_audit is None:
+    AMO_LEAD_SYNC_RESULT_LOG: Optional[str] = os.path.join(LOG_DIR, "amo_lead_sync_results.txt")
+else:
+    _s = _raw_lead_audit.strip()
+    if _s.lower() in ("", "false", "0", "off", "none", "disable"):
+        AMO_LEAD_SYNC_RESULT_LOG = None
+    else:
+        AMO_LEAD_SYNC_RESULT_LOG = _s
+
